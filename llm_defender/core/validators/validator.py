@@ -19,10 +19,16 @@ from pathlib import Path
 import torch
 import bittensor as bt
 from llm_defender.base.neuron import BaseNeuron
-from llm_defender.base.utils import EnginePrompt, timeout_decorator, validate_miner_blacklist
+from llm_defender.base.utils import (
+    EnginePrompt,
+    timeout_decorator,
+    validate_miner_blacklist,
+)
 from llm_defender.base import mock_data
 from llm_defender.core.validators import penalty
 import requests
+
+import llm_defender.core.validators.scoring as scoring
 
 
 class PromptInjectionValidator(BaseNeuron):
@@ -138,7 +144,7 @@ class PromptInjectionValidator(BaseNeuron):
 
         # Read command line arguments and perform actions based on them
         args = self._parse_args(parser=self.parser)
-        
+
         if args:
             if args.load_state:
                 self.load_state()
@@ -159,55 +165,48 @@ class PromptInjectionValidator(BaseNeuron):
 
     def _parse_args(self, parser):
         return parser.parse_args()
-    
+
     def process_responses(
         self,
         processed_uids: torch.tensor,
         query: dict,
         responses: list,
-        synapse_uuid: str
+        synapse_uuid: str,
     ) -> list:
         """
         This function processes the responses received from the miners.
         """
-        
-        if not synapse_uuid:
-            synapse_uuid = None
 
-        # processed_uids = processed_uids.tolist()
         # Determine target value for scoring
         if query["data"]["isPromptInjection"] is True:
             target = 1.0
         else:
             target = 0.0
-
         bt.logging.debug(f"Confidence target set to: {target}")
 
+        # Initiate the response objects
         response_data = []
-
         responses_invalid_uids = []
         responses_valid_uids = []
 
+        # Check each response
         for i, response in enumerate(responses):
+            # Get the hotkey for the response
             hotkey = self.metagraph.hotkeys[processed_uids[i]]
-            # Set the score for empty responses to 0
-            if not response.output or not all(
-                item in response.output for item in ["prompt", "confidence", "engines"]
-            ):
-                old_score = copy.deepcopy(self.scores[processed_uids[i]])
-                bt.logging.trace(f'Setting weights for invalid response from UID: {processed_uids[i]}. Old score: {old_score}')
-                self.scores[processed_uids[i]] = (
-                    self.neuron_config.alpha * self.scores[processed_uids[i]]
-                    + (1 - self.neuron_config.alpha) * 0.0
+
+            # Get the default response object
+            response_object = scoring.process.get_response_object(
+                processed_uids[i], hotkey, target, query["prompt"], synapse_uuid
+            )
+
+            # Set the score for invalid responses to 0.0
+            if not scoring.process.validate_response(response):
+                self.scores, old_score = scoring.process.assign_score_for_uid(
+                    self.scores, processed_uids[i], self.neuron_config.alpha, 0.0
                 )
-                new_score = self.scores[processed_uids[i]]
-                bt.logging.trace(f'Setting weights for invalid response from UID: {processed_uids[i]}. New score: {new_score}')
-                response_score = (
-                    distance_score
-                ) = speed_score = engine_score = distance_penalty_multiplier = general_penalty_multiplier= 0.0
-                miner_response = {}
-                engine_data = []
                 responses_invalid_uids.append(processed_uids[i])
+
+            # Calculate score for valid response
             else:
                 response_time = response.dendrite.process_time
                 (
@@ -216,7 +215,7 @@ class PromptInjectionValidator(BaseNeuron):
                     speed_score,
                     engine_score,
                     distance_penalty_multiplier,
-                    general_penalty_multiplier
+                    general_penalty_multiplier,
                 ) = self.calculate_score(
                     response=response.output,
                     target=target,
@@ -225,12 +224,12 @@ class PromptInjectionValidator(BaseNeuron):
                     hotkey=hotkey,
                 )
 
-                old_score = copy.deepcopy(self.scores[processed_uids[i]])
-                self.scores[processed_uids[i]] = (
-                    self.neuron_config.alpha * self.scores[processed_uids[i]]
-                    + (1 - self.neuron_config.alpha) * response_score
+                self.scores, old_score = scoring.process.assign_score_for_uid(
+                    self.scores,
+                    processed_uids[i],
+                    self.neuron_config.alpha,
+                    response_score,
                 )
-                new_score = self.scores[processed_uids[i]]
 
                 if not response.output["synapse_uuid"]:
                     miner_response_uuid = None
@@ -281,33 +280,26 @@ class PromptInjectionValidator(BaseNeuron):
                             f'Received a response from a miner with higher subnet version ({response.output["subnet_version"]}) than ours ({self.subnet_version}). Please update the validator.'
                         )
 
-            # Create response data object
-            data = {
-                "UID": processed_uids[i],
-                "hotkey": hotkey,
-                "target": target,
-                "original_prompt": query["prompt"],
-                "synapse_uuid": synapse_uuid,
-                "response": miner_response,
-                "engine_scores": {
+                # Populate response data
+                response_object["response"] = miner_response
+                response_object["engine_data"] = engine_data
+                response_object["engine_scores"] = {
                     "distance_score": float(distance_score),
                     "speed_score": float(speed_score),
                     "engine_score": float(engine_score),
                     "distance_penalty_multiplier": float(distance_penalty_multiplier),
                     "general_penalty_multiplier": float(general_penalty_multiplier),
-                    "response_score": float(response_score)
-                },
-                "weight_scores": {
-                    "new": float(new_score),
+                    "response_score": float(response_score),
+                }
+                response_object["weight_scores"] = {
+                    "new": float(self.scores[processed_uids[i]]),
                     "old": float(old_score),
-                    "change": float(new_score) - float(old_score),
-                },
-                "engine_data": engine_data,
-            }
+                    "change": float(self.scores[processed_uids[i]]) - float(old_score),
+                }
 
-            bt.logging.debug(f"Processed response: {data}")
+            bt.logging.debug(f"Processed response: {response_object}")
 
-            response_data.append(data)
+            response_data.append(response_object)
 
         bt.logging.info(f"Received valid responses from UIDs: {responses_valid_uids}")
         bt.logging.info(
@@ -415,7 +407,14 @@ class PromptInjectionValidator(BaseNeuron):
 
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-        return score, distance_score, speed_score, engine_score, distance_penalty_multiplier, general_penalty_multiplier
+        return (
+            score,
+            distance_score,
+            speed_score,
+            engine_score,
+            distance_penalty_multiplier,
+            general_penalty_multiplier,
+        )
 
     def apply_penalty(self, response, hotkey, prompt) -> tuple:
         """
@@ -543,7 +542,7 @@ class PromptInjectionValidator(BaseNeuron):
                 "scores": self.scores,
                 "hotkeys": self.hotkeys,
                 "last_updated_block": self.last_updated_block,
-                "blacklisted_miner_hotkeys": self.blacklisted_miner_hotkeys
+                "blacklisted_miner_hotkeys": self.blacklisted_miner_hotkeys,
             },
             self.base_path + "/state.pt",
         )
@@ -715,21 +714,26 @@ class PromptInjectionValidator(BaseNeuron):
                 if hotkey in self.metagraph.hotkeys:
                     blacklisted_uids.append(self.metagraph.hotkeys.index(hotkey))
                 else:
-                    bt.logging.trace(f'Blacklisted hotkey {hotkey} was not found from metagraph')
-            
-            bt.logging.debug(f'Blacklisted the following UIDs: {blacklisted_uids}')
-        
+                    bt.logging.trace(
+                        f"Blacklisted hotkey {hotkey} was not found from metagraph"
+                    )
+
+            bt.logging.debug(f"Blacklisted the following UIDs: {blacklisted_uids}")
+
         # Convert blacklisted UIDs to tensor
         blacklisted_uids_tensor = torch.tensor(
-            [uid not in blacklisted_uids for uid in self.metagraph.uids.tolist()],dtype=torch.bool
+            [uid not in blacklisted_uids for uid in self.metagraph.uids.tolist()],
+            dtype=torch.bool,
         )
 
-        bt.logging.trace(f'Blacklisted UIDs: {blacklisted_uids_tensor}')
+        bt.logging.trace(f"Blacklisted UIDs: {blacklisted_uids_tensor}")
 
         # Determine the UIDs to filter
-        uids_to_filter = torch.logical_not(~blacklisted_uids_tensor | ~invalid_uids | ~uids_with_stake)
+        uids_to_filter = torch.logical_not(
+            ~blacklisted_uids_tensor | ~invalid_uids | ~uids_with_stake
+        )
 
-        bt.logging.trace(f'UIDs to filter: {uids_to_filter}')
+        bt.logging.trace(f"UIDs to filter: {uids_to_filter}")
 
         # Define UIDs to query
         uids_to_query = [
@@ -749,26 +753,32 @@ class PromptInjectionValidator(BaseNeuron):
             self.metagraph.hotkeys.index(axon.hotkey) for axon in final_axons_to_filter
         ]
 
-        bt.logging.trace(f'Final axons to filter: {final_axons_to_filter}')
-        bt.logging.debug(f'Filtered UIDs: {uids_not_to_query}')
+        bt.logging.trace(f"Final axons to filter: {final_axons_to_filter}")
+        bt.logging.debug(f"Filtered UIDs: {uids_not_to_query}")
 
         # Reduce the number of simultaneous UIDs to query
         if self.max_targets < 256:
             start_idx = self.max_targets * self.target_group
-            end_idx = min(len(uids_to_query), self.max_targets * (self.target_group + 1))
+            end_idx = min(
+                len(uids_to_query), self.max_targets * (self.target_group + 1)
+            )
             if start_idx == end_idx:
-                return [],[]
+                return [], []
             if start_idx >= len(uids_to_query):
-                raise IndexError("Starting index for querying the miners is out-of-bounds")
-            
+                raise IndexError(
+                    "Starting index for querying the miners is out-of-bounds"
+                )
+
             if end_idx >= len(uids_to_query):
                 end_idx = len(uids_to_query)
                 self.target_group = 0
             else:
                 self.target_group += 1
-            
-            bt.logging.debug(f"List indices for UIDs to query starting from: '{start_idx}' ending with: '{end_idx}'")
-            uids_to_query = uids_to_query[start_idx:end_idx] 
+
+            bt.logging.debug(
+                f"List indices for UIDs to query starting from: '{start_idx}' ending with: '{end_idx}'"
+            )
+            uids_to_query = uids_to_query[start_idx:end_idx]
 
         list_of_uids = [
             self.metagraph.hotkeys.index(axon.hotkey) for axon in uids_to_query
@@ -776,8 +786,6 @@ class PromptInjectionValidator(BaseNeuron):
 
         list_of_hotkeys = [axon.hotkey for axon in uids_to_query]
 
-        bt.logging.trace(
-            f"Sending query to the following hotkeys: {list_of_hotkeys}"
-        )
+        bt.logging.trace(f"Sending query to the following hotkeys: {list_of_hotkeys}")
 
         return uids_to_query, list_of_uids, blacklisted_uids, uids_not_to_query

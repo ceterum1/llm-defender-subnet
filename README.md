@@ -144,6 +144,32 @@ Fine-tuning and development have been described in their respective guides:
 - [Developer Guide](./docs/developer-guide.md)
 - [Fine-tuning Guide](./docs/fine-tuning-guide.md)
 
+# SN14 patching policy
+
+> [!NOTE]
+> These policies will be valid as of the release v0.3.0
+
+In order to ensure the subnet users can prepare in advance we have defined a formal patching policy for the subnet components.
+
+The subnet uses **semantic versioning** in which the version number consists of three parts (Major.Minor.Patch) and an optional pre-release tag (-beta, -alpha). Depending on the type of release, there are a few things that the subnet users should be aware of.
+
+- Major Releases (**X**.0.0)
+    - There will always be breaking changes and updates are mandatory for all subnet users.
+    - After the update is released, the *weights_version* hyperparameter is adjusted immediately after release such that in order to set the weights in the subnet, the neurons must be running the latest version.
+    - Major releases are communicated in the SN14 Discord Channel at least 1 week in advance
+    - The major release will always be done on Wednesday at 15:00 UTC+0
+
+- Minor releases (0.**X**.0)
+    - There can be breaking changes and if there are, the update will be announced in the SN14 Discord Channel at least 48 hours in advance
+    - If there are breaking changes, the *weights_version* hyperparameter is adjusted immediately after release such that in order to set the weights in the subnet, the neurons must be running the latest version.
+    - If there are no breaking changes, the *weights_version* hyperparameter will be adjusted 24 hours after the launch.
+    - Minor releases are released on weekdays at 15:00 UTC+0.
+    - Minor releases are mandatory for all subnet users
+
+- Patch releases (0.0.**X**)
+    - Patch releases do not contain breaking changes and updates will not be mandatory unless there is a need to hotfix either scoring or penalty algorithms
+    
+
 ## Version 1.0 feature objectives
 The following is a list of high-level objectives for version 1.0 of the entire project (some of these are not directly related to the subnet code)
 - The following analyzers

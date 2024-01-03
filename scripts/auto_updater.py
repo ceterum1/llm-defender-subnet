@@ -74,6 +74,9 @@ def run(args):
                     f"bash scripts/run_neuron.sh {run_args}", check=True, shell=True
                 )
 
+                logger.info('Installing the new subnet version')
+                subprocess.run('pip install -e .', check=True, shell=True)
+                
                 # Restart pm2 instances
                 for instance_name in args.pm2_instance_names:
                     try:
@@ -88,6 +91,7 @@ def run(args):
                             shell=True,
                         )
                         logger.info("Restarted PM2 process: %s", instance_name)
+                    
                     except subprocess.CalledProcessError as e:
                         logger.error("Unable to restart PM2 instance: %s", e)
 
