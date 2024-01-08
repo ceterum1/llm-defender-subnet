@@ -2,6 +2,7 @@ import bittensor as bt
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import CountVectorizer
 import numpy as np
+from llm_defender.base.utils import validate_uid
 
 
 def _check_response_history(
@@ -61,7 +62,7 @@ def check_penalty(uid, miner_responses):
     category"""
     penalty = 0.0
 
-    if not uid or not miner_responses:
+    if not validate_uid(uid) or not miner_responses:
         # Apply penalty if invalid values are provided to the function
         return 20.0
 

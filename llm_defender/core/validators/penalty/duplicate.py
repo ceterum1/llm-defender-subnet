@@ -1,4 +1,5 @@
 import bittensor as bt
+from llm_defender.base.utils import validate_uid
 
 
 def _calculate_duplicate_percentage(
@@ -72,7 +73,7 @@ def _find_identical_reply(
 
 def check_penalty(uid, miner_responses, response):
     """This function checks the total penalty score within duplicate category"""
-    if not uid or not miner_responses or not response:
+    if not validate_uid(uid) or not miner_responses or not response:
         # Apply penalty if invalid values are provided to the function
         return 20.0
 

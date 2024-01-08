@@ -1,5 +1,5 @@
 import bittensor as bt
-
+from llm_defender.base.utils import validate_uid
 
 def _check_prompt_response_mismatch(
     uid, response, prompt, penalty_name="Prompt/Response mismatch"
@@ -58,7 +58,7 @@ def _check_confidence_history(
 def check_penalty(uid, miner_responses, response, prompt):
     """This function checks the total penalty score within duplicate
     category"""
-    if not uid or not miner_responses or not response or not prompt:
+    if not validate_uid(uid) or not miner_responses or not response or not prompt:
         # Apply penalty if invalid values are provided to the function
         return 10.0
 

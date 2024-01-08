@@ -127,3 +127,28 @@ def validate_miner_blacklist(miner_blacklist) -> bool:
             )
         )
     return False
+
+def validate_uid(uid):
+    """
+    This method makes sure that a uid is an int instance 
+    between 0 and 256. It also makes sure that boolean 
+    inputs are filtered out as non-valid uid's.
+
+    Arguments:
+        uid:
+            A unique user id that we are checking to make 
+            sure is valid. (integer between 0 and 256).
+
+    Returns:
+        True:
+            uid is valid--it is an integer between 0 and 256, 
+            True and False excluded.
+        False:
+            uid is NOT valid.
+    """
+    # uid must be an integer instance between 0 and 256
+    if not isinstance(uid, int) or isinstance(uid, bool):
+        return False
+    if uid < 0 or uid > 256:
+        return False
+    return True
